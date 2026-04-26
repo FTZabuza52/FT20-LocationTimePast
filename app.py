@@ -16,7 +16,6 @@ def check_password():
         st.title("Acesso Restrito")
         senha = st.text_input("Digite a senha de acesso:", type="password")
         if st.button("Entrar"):
-            # O ERRO ESTAVA AQUI: PRECISA DE ASPAS
             if senha == "ft20":  
                 st.session_state["authenticated"] = True
                 st.rerun()
