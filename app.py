@@ -16,7 +16,7 @@ def check_password():
         st.title("Acesso Restrito")
         senha = st.text_input("Digite a senha de acesso:", type="password")
         if st.button("Entrar"):
-            # O erro anterior foi aqui. A senha PRECISA estar entre aspas.
+            # O ERRO ESTAVA AQUI: PRECISA DE ASPAS
             if senha == "ft20":  
                 st.session_state["authenticated"] = True
                 st.rerun()
@@ -31,7 +31,6 @@ if not check_password():
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="FT20 - LTP", layout="wide", page_icon="🦅")
 
-# Cabeçalho com a Identidade: Coruja, Águia, Raio e Trajeto
 st.markdown("""
     <div style="text-align: center;">
         <h1 style="color: #d32f2f;">FT20 - LTP 🦉🦅⚡📈</h1>
@@ -41,7 +40,7 @@ st.markdown("""
     <hr style="border: 1px solid #d32f2f;">
 """, unsafe_allow_html=True)
 
-# Captura de Localização (GPS do Celular)
+# Captura de Localização (GPS do Telemóvel)
 loc = streamlit_js_eval(js_expressions="new Promise((resolve, reject) => { navigator.geolocation.getCurrentPosition(pos => { resolve({lat: pos.coords.latitude, lon: pos.coords.longitude}) }, err => { reject(err) }) })", key="get_location")
 
 # --- PROCESSAMENTO DO SENTRY ---
@@ -51,7 +50,6 @@ def extrair_dados_sentry(pdf_file):
         for page in pdf.pages:
             text = page.extract_text()
             if not text: continue
-            # Padrão para capturar Data e Coordenadas do relatório SESP-MT
             datas = re.findall(r'(\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2})', text)
             coords = re.findall(r'(-\d+\.\d+)\s*&\s*(-\d+\.\d+)', text)
             for i in range(min(len(coords), len(datas))):
@@ -66,33 +64,24 @@ uploaded_file = st.file_uploader("📂 Carregar Relatório de Passagem (PDF)", t
 
 if uploaded_file:
     df = extrair_dados_sentry(uploaded_file)
-    
     if not df.empty:
         df = df.sort_values('data')
-        
-        # Mapa com Satélite Google
         m = folium.Map(
             location=[df['lat'].iloc[-1], df['lon'].iloc[-1]], 
             zoom_start=13,
             tiles="https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}",
             attr="Google Satellite"
         )
-
-        # 1. Calor (Histórico de Passagens)
         HeatMap(data=df[['lat', 'lon']], radius=15).add_to(m)
+        folium.PolyLine(df[['lat', 'lon']].values.tolist(), color="#00f2ff", weight=5).add_to(m)
 
-        # 2. Trajeto Recente (Linha de deslocamento)
-        folium.PolyLine(df[['lat', 'lon']].values.tolist(), color="#00f2ff", weight=5, opacity=0.7).add_to(m)
-
-        # 3. PONTO DA ABORDAGEM (Seu GPS atual)
         if loc:
             folium.Marker(
                 [loc['lat'], loc['lon']],
                 popup="LOCAL DA ABORDAGEM ATUAL",
                 icon=folium.Icon(color="red", icon="bolt", prefix='fa')
             ).add_to(m)
-            st.sidebar.success("📍 Localização da Abordagem Fixada")
 
         st_folium(m, width="100%", height=600)
     else:
-        st.warning("Coordenadas não encontradas no arquivo.")
+        st.warning("Coordenadas não encontradas no ficheiro.")
