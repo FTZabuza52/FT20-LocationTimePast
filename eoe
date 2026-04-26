@@ -1,0 +1,80 @@
+import streamlit as st
+import face_recognition
+import numpy as np
+from PIL import Image
+
+# --- SISTEMA DE LOGIN ---
+def check_password():
+    if "authenticated_eoe" not in st.session_state:
+        st.session_state["authenticated_eoe"] = False
+    if not st.session_state["authenticated_eoe"]:
+        st.title("Acesso Restrito - FT20")
+        senha = st.text_input("Digite a senha de acesso:", type="password")
+        if st.button("Entrar"):
+            if senha == "ft20":
+                st.session_state["authenticated_eoe"] = True
+                st.rerun()
+            else:
+                st.error("Senha incorreta")
+        return False
+    return True
+
+if not check_password():
+    st.stop()
+
+# --- CONFIGURAÇÃO DA PÁGINA ---
+st.set_page_config(page_title="FT20 - EOE", page_icon="👁️")
+
+st.markdown("""
+    <div style="text-align: center;">
+        <h1 style="color: #d32f2f;">FT20 - EOE 🦉🦅⚡👁️</h1>
+        <p style="font-size: 1.1em; font-weight: bold;">Eye Of Eagle</p>
+        <p style="color: #555;">Reconhecimento Facial Tático (Experimental)</p>
+    </div>
+    <hr style="border: 1px solid #d32f2f;">
+""", unsafe_allow_html=True)
+
+# --- 1. BASE DE DADOS (SUAS FOTOS DE REFERÊNCIA) ---
+st.sidebar.header("📂 Banco de Dados")
+fotos_base = st.sidebar.file_uploader("Suba fotos suas para a BASE", type=['jpg', 'png', 'jpeg'], accept_multiple_files=True)
+
+encoding_base = []
+nomes_base = []
+
+if fotos_base:
+    with st.spinner('Codificando base de dados...'):
+        for foto in fotos_base:
+            image = face_recognition.load_image_file(foto)
+            encodings = face_recognition.face_encodings(image)
+            if encodings:
+                encoding_base.append(encodings[0])
+                nomes_base.append(foto.name)
+    st.sidebar.success(f"{len(encoding_base)} faces prontas para comparação.")
+
+# --- 2. ÁREA DE TESTE (A FOTO DO "ABORDADO") ---
+st.info("Suba uma foto agora para testar se o sistema o reconhece contra a base.")
+foto_teste = st.file_uploader("📸 Foto para Reconhecimento", type=['jpg', 'png', 'jpeg'])
+
+if foto_teste and encoding_base:
+    with st.spinner('Analisando rosto...'):
+        img_teste = face_recognition.load_image_file(foto_teste)
+        encodings_teste = face_recognition.face_encodings(img_teste)
+        
+        if encodings_teste:
+            face_to_compare = encodings_teste[0]
+            # tolerance=0.5 é o equilíbrio entre rigor e flexibilidade
+            resultados = face_recognition.compare_faces(encoding_base, face_to_compare, tolerance=0.5)
+            distancias = face_recognition.face_distance(encoding_base, face_to_compare)
+            
+            if True in resultados:
+                match_index = np.argmin(distancias)
+                confianca = (1 - distancias[match_index]) * 100
+                st.balloons()
+                st.success(f"✅ IDENTIFICAÇÃO POSITIVA: {nomes_base[match_index]}")
+                st.metric("Nível de Confiança", f"{round(confianca, 2)}%")
+            else:
+                st.error("⚠️ NENHUMA CORRESPONDÊNCIA ENCONTRADA")
+        else:
+            st.warning("Não detetei nenhum rosto na foto de teste.")
+elif not encoding_base and foto_teste:
+    st.warning("Primeiro, suba as fotos de referência na barra lateral!")
