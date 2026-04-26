@@ -5,21 +5,49 @@ from streamlit_folium import st_folium
 from folium.plugins import HeatMap
 import pdfplumber
 import re
+from streamlit_js_eval import streamlit_js_eval
 
-st.set_page_config(page_title="Radar Sentry Mobile", layout="wide")
-st.title("🛡️ Analisador de Campo - Sentry MT")
+# --- SISTEMA DE LOGIN SIMPLES ---
+def check_password():
+    if "authenticated" not in st.session_state:
+        st.session_state["authenticated"] = False
+    
+    if not st.session_state["authenticated"]:
+        st.title("Acesso Restrito")
+        senha = st.text_input("Digite a senha de acesso:", type="password")
+        if st.button("Entrar"):
+            if senha == ft20:  # <-- MUDE SUA SENHA AQUI
+                st.session_state["authenticated"] = True
+                st.rerun()
+            else:
+                st.error("Senha incorreta")
+        return False
+    return True
 
-# Função para extrair dados do PDF do Sentry
+if not check_password():
+    st.stop()
+
+# --- CONFIGURAÇÃO DA PÁGINA ---
+st.set_page_config(page_title="FT20 - LTP", layout="wide")
+st.title("FT20 - LTP 🦉🦅📈")
+
+# Capturar Localização Atual do Celular
+st.sidebar.markdown("### 📍 Localização da Abordagem")
+loc = streamlit_js_eval(js_expressions="new Promise((resolve, reject) => { navigator.geolocation.getCurrentPosition(pos => { resolve({lat: pos.coords.latitude, lon: pos.coords.longitude}) }, err => { reject(err) }) })", key="get_location")
+
+if loc:
+    st.sidebar.success(f"Localização Capturada: {round(loc['lat'], 4)}, {round(loc['lon'], 4)}")
+
+# --- FUNÇÃO DE EXTRAÇÃO ---
 def extrair_dados_sentry(pdf_file):
     dados = []
     with pdfplumber.open(pdf_file) as pdf:
         for page in pdf.pages:
             text = page.extract_text()
-            # Busca por Data e Coordenadas no texto do relatório
+            if not text: continue
             datas = re.findall(r'(\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2})', text)
-            coords = re.findall(r'(-\d+\.\d+) & (-\d+\.\d+)', text)
-            
-            for i in range(len(coords)):
+            coords = re.findall(r'(-\d+\.\d+)\s*&\s*(-\d+\.\d+)', text)
+            for i in range(min(len(coords), len(datas))):
                 dados.append({
                     'data': pd.to_datetime(datas[i], dayfirst=True),
                     'lat': float(coords[i][0]),
@@ -27,46 +55,40 @@ def extrair_dados_sentry(pdf_file):
                 })
     return pd.DataFrame(dados)
 
-uploaded_file = st.file_uploader("Arraste o PDF do Sentry aqui", type=["pdf"])
+uploaded_file = st.file_uploader("Subir PDF do Sentry", type=["pdf"])
 
 if uploaded_file:
-    with st.spinner('Processando trajetórias...'):
-        df = extrair_dados_sentry(uploaded_file)
+    df = extrair_dados_sentry(uploaded_file)
+    
+    if not df.empty:
+        df = df.sort_values('data')
+        ultima_p = df['data'].max()
         
-        if not df.empty:
-            # Ordenar por tempo
-            df = df.sort_values('data')
-            
-            # Definir o que é "Recente" (ex: últimas 48h do relatório)
-            ultima_passagem = df['data'].max()
-            limite = ultima_passagem - pd.Timedelta(hours=48)
-            
-            historico = df[df['data'] < limite]
-            recente = df[df['data'] >= limite]
+        # Mapa com Satélite Google
+        m = folium.Map(
+            location=[df['lat'].iloc[-1], df['lon'].iloc[-1]], 
+            zoom_start=13,
+            tiles="https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}",
+            attr="Google Satellite"
+        )
 
-            # Criar Mapa com fundo Satélite
-            m = folium.Map(
-                location=[df['lat'].iloc[-1], df['lon'].iloc[-1]], 
-                zoom_start=13,
-                tiles="https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}",
-                attr="Google Satellite"
-            )
+        # 1. Calor (Histórico)
+        HeatMap(data=df[['lat', 'lon']], radius=15, name="Histórico").add_to(m)
 
-            # 1. Mapa de Calor (Rotina do Veículo)
-            if not historico.empty:
-                HeatMap(data=historico[['lat', 'lon']], radius=15, name="Rotina").add_to(m)
+        # 2. Trajeto Recente (Últimas 48h)
+        limite = ultima_p - pd.Timedelta(hours=48)
+        recente = df[df['data'] >= limite]
+        folium.PolyLine(recente[['lat', 'lon']].values.tolist(), color="cyan", weight=5).add_to(m)
 
-            # 2. Rota Recente (Linha de Trajetória)
-            if not recente.empty:
-                folium.PolyLine(recente[['lat', 'lon']].values.tolist(), color="cyan", weight=4).add_to(m)
-                # Marcador da última posição (Abordagem)
-                folium.Marker(
-                    [recente['lat'].iloc[-1], recente['lon'].iloc[-1]],
-                    icon=folium.Icon(color="red", icon="screenshot", prefix='fa')
-                ).add_to(m)
+        # 3. PONTO DA ABORDAGEM ATUAL (GPS do Celular)
+        if loc:
+            folium.Marker(
+                [loc['lat'], loc['lon']],
+                popup="LOCAL DA ABORDAGEM",
+                icon=folium.Icon(color="green", icon="bullseye", prefix='fa')
+            ).add_to(m)
 
-            st_folium(m, width="100%", height=500)
-            st.write(f"**Veículo:** {uploaded_file.name}")
-            st.write(f"**Última passagem detectada:** {ultima_passagem}")
-        else:
-            st.error("Não foi possível extrair coordenadas deste PDF.")
+        st_folium(m, width="100%", height=600)
+        st.write(f"Última Passagem no PDF: {ultima_p}")
+    else:
+        st.warning("Nenhuma coordenada encontrada no PDF.")
