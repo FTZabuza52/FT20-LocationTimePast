@@ -100,7 +100,7 @@ PONTOS_POR_ID = {
     "24":   {"nome": "MT-265 Km 01 Bolívia -> P. Esperidião", "zona": "06B_PORTO_ESPERIDIAO_BOL", "regiao": "Fronteira Bolívia (Porto Esperidião)", "dist_bg": 818, "lat": -15.8750, "lon": -58.4900, "sentido_bg": "APROXIMACAO", "h_min_bg": 9.2, "h_max_bg": 12.2},
     "376":  {"nome": "BR-070 Km 743 Cáceres (Ent. Oeste)", "zona": "07_CACERES_BR070", "regiao": "Cáceres", "dist_bg": 705, "lat": -16.0780, "lon": -57.6450, "sentido_bg": "APROXIMACAO", "h_min_bg": 7.8, "h_max_bg": 10.5},
     "377":  {"nome": "BR-070 Km 736 Cáceres (Saída Oeste)", "zona": "07_CACERES_BR070", "regiao": "Cáceres", "dist_bg": 705, "lat": -16.0710, "lon": -57.6580, "sentido_bg": "AFASTAMENTO", "h_min_bg": 7.8, "h_max_bg": 10.5},
-    # Funil Leste (Campo Verde / Primavera)
+    # Funil Leste (Campo Verde / Primavera / Posto Pequi / General Carneiro)
     "572":  {"nome": "Campo Verde Saída Primavera (Sent. CV)", "zona": "09_CAMPO_VERDE_FUNIL", "regiao": "Campo Verde", "dist_bg": 370, "lat": -15.5450, "lon": -55.1620, "sentido_bg": "AFASTAMENTO", "h_min_bg": 4.2, "h_max_bg": 6.0},
     "369":  {"nome": "BR-070 Km 283 Primavera do Leste (Ent. CV)", "zona": "10_PRIMAVERA_FUNIL", "regiao": "Primavera do Leste", "dist_bg": 275, "lat": -15.5781, "lon": -54.3920, "sentido_bg": "APROXIMACAO", "h_min_bg": 3.2, "h_max_bg": 4.8},
     # Eixo Sul / Divisa MS -> Itiquira -> Rondonópolis -> Alto Garças / Alto Taquari
@@ -151,6 +151,8 @@ def classificar_local_dinamico(cam_id: str, local_texto: str) -> dict:
         ("JACIARA", "17_JACIARA_BR364", "Jaciara (BR-364)", 415, -15.9525, -54.9947, 4.6, 6.5),
         ("CAMPO VERDE", "09_CAMPO_VERDE_FUNIL", "Campo Verde", 370, -15.5450, -55.1620, 4.2, 6.0),
         ("PP03", "09_CAMPO_VERDE_FUNIL", "Campo Verde", 370, -15.5450, -55.1620, 4.2, 6.0),
+        ("POSTO PEQUI", "10B_POSTO_PEQUI_FUNIL", "Posto Pequi (BR-070)", 230, -15.6100, -53.9800, 2.6, 3.8),
+        ("PEQUI", "10B_POSTO_PEQUI_FUNIL", "Posto Pequi (BR-070)", 230, -15.6100, -53.9800, 2.6, 3.8),
         ("PRIMAVERA DO LESTE", "10_PRIMAVERA_FUNIL", "Primavera do Leste", 275, -15.5580, -54.2950, 3.2, 4.8),
         ("ITIQUIRA", "15_DIVISA_MS_ITIQUIRA", "Divisa com MS (Itiquira / Sonora)", 630, -17.2194, -54.7586, 6.6, 9.0),
         ("PP01", "15_DIVISA_MS_ITIQUIRA", "Divisa com MS (Itiquira / Sonora)", 630, -17.2194, -54.7586, 6.6, 9.0),
@@ -475,7 +477,7 @@ def parse_arquivo_sentry(nome_arquivo: str, raw_bytes: bytes) -> pd.DataFrame:
 
 
 # ==============================================================================
-# MOTORES DE INTELIGÊNCIA (ETAPA 1 TOP-DOWN & ETAPA 2 ROSA DOS VENTOS)
+# MOTORES DE INTELIGÊNCIA (ETAPA 1 PONDERADA & ETAPA 2 ROSA DOS VENTOS)
 # ==============================================================================
 def calcular_rosa_dos_ventos(lat1, lon1, lat2, lon2) -> str:
     if any(pd.isna(v) for v in [lat1, lon1, lat2, lon2]):
@@ -565,9 +567,16 @@ def analisar_etapa1_corredor(
     min_dp_min: float = 1.0,
     max_dp_min: float = 2.0,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Classifica alvos em deslocamento rumo a BG (Top-Down por Mais de uma Região) e detecta batedores."""
+    """
+    Classifica alvos em deslocamento rumo a BG (Top-Down Ponderado):
+    - Veículos com >= 2 regiões (ou >= 2 relatórios) que passaram nos pontos-chave finais
+      (General Carneiro, Primavera do Leste ou Posto Pequi) recebem ponderação máxima de prioridade,
+      superando veículos de 2 regiões comuns.
+    - Se houver 5 interações em várias regiões e passar em uma dessas cidades prioritárias,
+      sobe à frente dos demais.
+    """
     df_v = df_valid.sort_values(["placa", "timestamp"]).reset_index(drop=True)
-    for col_s in ["zona", "regiao", "arquivo", "nome", "sentido_bg", "cam_id"]:
+    for col_s in ["zona", "regiao", "arquivo", "nome", "local", "sentido_bg", "cam_id"]:
         df_v[col_s] = df_v[col_s].astype(str)
 
     df_v["prev_zona"] = df_v.groupby("placa")["zona"].shift(1)
@@ -585,20 +594,44 @@ def analisar_etapa1_corredor(
         arquivos_seq = list(dict.fromkeys(grp["arquivo"]))
         qtd_regioes = len(regioes_seq)
         qtd_arquivos = len(arquivos_seq)
+        total_interacoes = len(grp)
 
         d_ini = float(grp["dist_bg"].dropna().iloc[0]) if not grp["dist_bg"].dropna().empty else np.nan
         d_fim = float(grp["dist_bg"].dropna().iloc[-1]) if not grp["dist_bg"].dropna().empty else np.nan
         aprox_km = (d_ini - d_fim) if (pd.notna(d_ini) and pd.notna(d_fim)) else 0.0
 
-        if aprox_km < 40:
+        texto_busca_pontos = " | ".join(
+            (grp["regiao"] + " " + grp["nome"] + " " + grp["local"]).str.upper().tolist()
+        )
+        cidades_criticas_hit = []
+        if "GENERAL CARNEIRO" in texto_busca_pontos:
+            cidades_criticas_hit.append("General Carneiro")
+        if "PRIMAVERA" in texto_busca_pontos:
+            cidades_criticas_hit.append("Primavera do Leste")
+        if "POSTO PEQUI" in texto_busca_pontos or "PEQUI" in texto_busca_pontos:
+            cidades_criticas_hit.append("Posto Pequi")
+
+        tem_ponto_critico = len(cidades_criticas_hit) > 0
+        multiregiao_ou_relatorio = (qtd_regioes >= 2) or (qtd_arquivos >= 2)
+
+        prioridade_funil = multiregiao_ou_relatorio and tem_ponto_critico
+        if not prioridade_funil and aprox_km < 40:
             continue
-        if grp["sentido_bg"].iloc[-1] == "AFASTAMENTO" and qtd_regioes < 2:
+        if grp["sentido_bg"].iloc[-1] == "AFASTAMENTO" and not prioridade_funil and qtd_regioes < 2:
             continue
+
+        score_prioridade = (
+            (qtd_regioes * 100)
+            + (qtd_arquivos * 20)
+            + (total_interacoes * 10)
+            + (250 if prioridade_funil else 0)
+            + (len(cidades_criticas_hit) * 40)
+        )
 
         t_ini = grp["timestamp"].iloc[0]
         t_fim = grp["timestamp"].iloc[-1]
         dur_min = (t_fim - t_ini).total_seconds() / 60.0
-        vel_kmh = (aprox_km / (dur_min / 60.0)) if dur_min > 0 else 0.0
+        vel_kmh = (abs(aprox_km) / (dur_min / 60.0)) if dur_min > 0 and abs(aprox_km) > 0 else 0.0
 
         ratios = []
         for idx in range(1, len(grp)):
@@ -612,36 +645,36 @@ def analisar_etapa1_corredor(
         if vel_kmh >= 102 or ratio_medio <= 0.85:
             perfil = "⚡ CAVALO DOIDO (Rápido / Sem Parada)"
             fator_bg = 0.90
-        elif vel_kmh <= 66 or ratio_medio >= 1.25:
+        elif vel_kmh > 0 and (vel_kmh <= 66 or ratio_medio >= 1.25):
             perfil = "⛽ TANQUE REDUZIDO (Lento / Abastecendo)"
             fator_bg = 1.15
         else:
             perfil = "🚗 FLUXO PADRÃO RUMO BG"
             fator_bg = 1.00
 
-        h_min_bg = float(grp["h_min_bg"].dropna().iloc[-1]) if not grp["h_min_bg"].dropna().empty else 6.0
-        h_max_bg = float(grp["h_max_bg"].dropna().iloc[-1]) if not grp["h_max_bg"].dropna().empty else 8.5
+        h_min_bg = float(grp["h_min_bg"].dropna().iloc[-1]) if not grp["h_min_bg"].dropna().empty else 3.5
+        h_max_bg = float(grp["h_max_bg"].dropna().iloc[-1]) if not grp["h_max_bg"].dropna().empty else 5.0
 
         chegada_bg_ini = t_fim + timedelta(hours=float(h_min_bg * fator_bg))
         chegada_bg_fim = t_fim + timedelta(hours=float(h_max_bg * fator_bg))
 
+        tag_prio = f"🔥 PRIORIDADE ({', '.join(cidades_criticas_hit)}) — " if prioridade_funil else ""
         if qtd_regioes >= 2:
             if len(regioes_seq) == 2:
-                desc_regiao = f"{qtd_regioes} regiões: Saiu de {regioes_seq[0]} e apareceu em {regioes_seq[1]}"
+                desc_regiao = f"{tag_prio}{qtd_regioes} regiões: Saiu de {regioes_seq[0]} e apareceu em {regioes_seq[1]}"
             else:
                 meio = " -> ".join(regioes_seq[1:-1])
-                desc_regiao = f"{qtd_regioes} regiões: Saiu de {regioes_seq[0]} -> {meio} -> apareceu em {regioes_seq[-1]}"
+                desc_regiao = f"{tag_prio}{qtd_regioes} regiões: Saiu de {regioes_seq[0]} -> {meio} -> apareceu em {regioes_seq[-1]}"
         else:
-            desc_regiao = f"1 região: {regioes_seq[0]}"
+            desc_regiao = f"{tag_prio}1 região ({qtd_arquivos} rel.): {regioes_seq[0]}"
 
         alvos.append({
-            "_qtd_regioes": qtd_regioes,
-            "_qtd_arquivos": qtd_arquivos,
+            "_score_prioridade": score_prioridade,
             "Placa": grp["placa_fmt"].iloc[0],
-            "Mais de uma Região": desc_regiao,
+            "Prioridade / Mais de uma Região": desc_regiao,
             "Perfil Cinemático": perfil,
-            "Leituras": len(grp),
-            "Avanço Rumo BG (km)": round(aprox_km, 0),
+            "Leituras": total_interacoes,
+            "Avanço Rumo BG (km)": round(max(aprox_km, 0.0), 0),
             "Vel. Média (km/h)": round(vel_kmh, 1),
             "Último Ponto": grp["nome"].iloc[-1],
             "Última Leitura": t_fim.strftime("%d/%m %H:%M"),
@@ -652,10 +685,10 @@ def analisar_etapa1_corredor(
     if not df_alvos.empty:
         df_alvos = (
             df_alvos.sort_values(
-                by=["_qtd_regioes", "_qtd_arquivos", "Avanço Rumo BG (km)", "Vel. Média (km/h)"],
-                ascending=[False, False, False, False],
+                by=["_score_prioridade", "Avanço Rumo BG (km)", "Vel. Média (km/h)"],
+                ascending=[False, False, False],
             )
-            .drop(columns=["_qtd_regioes", "_qtd_arquivos"])
+            .drop(columns=["_score_prioridade"])
             .reset_index(drop=True)
         )
 
@@ -851,7 +884,7 @@ with tab1:
             max_dp_min=float(dp_val[1]),
         )
 
-        st.subheader("🎯 Alvos Rumo a Barra do Garças (Prioridade Top-Down: Mais de uma Região)")
+        st.subheader("🎯 Alvos Rumo a Barra do Garças (Prioridade Ponderada: Funil Final + Multi-Região)")
         if df_alvos.empty:
             st.warning("Nenhum veículo com progressão líquida >= 40 km rumo a Barra do Garças encontrado neste recorte.")
         else:
